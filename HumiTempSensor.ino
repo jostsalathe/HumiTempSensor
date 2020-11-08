@@ -2,38 +2,33 @@
 #include <Wire.h>
 #include <SSD1306Wire.h>
 #include <ESP8266WiFi.h>
-#include <FS.h>
 #include <ThingsBoard.h>
-
-String wifiSsid;
-String wifiPassword;
-IPAddress staticIP;
-IPAddress gateway;
-IPAddress subnet;
-
-String thingsboardServer;
-String token;
-
-long intervalMs;
+#include <ParametersSPIFFS.h>
+#include <EspBootstrapDict.h>
 
 
-#define DEBUG_EN 14
+const String TOKEN("HumiTempSensorV2");
+
+const int NCONFIG = 11;
+Dictionary configuration(NCONFIG);
+
+
+// === pinout definitions =============================
 #define LED_ST_0 4
 #define LED_ST_1 5
 #define GPIO12 12
-#define GPIO13 13
-
-// I2C
-
+#define FORCE_CFG 13
+#define DEBUG_EN 14
 #define SDA 2
 #define SCL 0
 
 WiFiClient wifiClient;
+IPAddress staticIP, gateway, subnet;
 
-// Initialize SSD1306 OLED.
+// === construct SSD1306 OLED. ========================
 SSD1306Wire display(0x3c, SDA, SCL, GEOMETRY_128_32);
 
-// Initialize BME280I2C sensor.
+// === construct BME280I2C sensor.
 BME280I2C::Settings bmeSettings(
   BME280I2C::OSR_X1, // temp oversampling
   BME280I2C::OSR_X1, // humidity oversampling
@@ -48,15 +43,16 @@ BME280I2C bme(bmeSettings);
 
 bool debug = true;
 
-unsigned long lastSend;
+unsigned int interval;
 
+float warnThreshold;
 
 void setup()
 {
   pinMode(DEBUG_EN, INPUT_PULLUP);
+  pinMode(FORCE_CFG, INPUT_PULLUP);
   // internally pulled high - solder bridge open
-  if (digitalRead(DEBUG_EN)) debug = false;
-  else debug = true;
+  debug = !digitalRead(DEBUG_EN);
   pinMode(LED_ST_0, OUTPUT);
   pinMode(LED_ST_1, OUTPUT);
   digitalWrite(LED_ST_0, LOW);
@@ -66,103 +62,121 @@ void setup()
   Wire.begin(SDA, SCL);
 
   if (readConfig()) getAndReportSensorDataThenSleep();
-  else Serial.println("handling faulty configuration");
+
+  printError("entering configuration mode...");
+  runConfigAP();
 }
 
 void loop()
 {
-  digitalWrite(LED_ST_1, HIGH);
-  delay(50);
-  digitalWrite(LED_ST_0, HIGH);
-  delay(200);
-  digitalWrite(LED_ST_1, LOW);
-  delay(50);
-  digitalWrite(LED_ST_0, LOW);
-  delay(200);
 }
 
 bool readConfig()
 {
-  if (debug) Serial.println("reading configuration files from SPIFFS...");
+  printDebug("reading configuration files from SPIFFS...");
 
-  // do stuff
+  configuration("Title", "HumiTempSensor Configuration");
+  configuration("wifiSsid", "your WIFI SSID");
+  configuration("wifiPassword", "your WIFI password");
+  configuration("staticIP", "192.168.0.42");
+  configuration("gateway", "192.168.0.1");
+  configuration("subnet", "255.255.255.0");
+  configuration("thingsboardServer", "thingsboard-server.hostname");
+  configuration("thingsboardToken", "your thingsboard sensor token");
+  configuration("interval", "10");
+  configuration("warnThreshold", "65");
+  configuration("flipScreen", "false");
+
+  // try loading config from SPIFFS
   SPIFFS.begin();
+  ParametersSPIFFS param(TOKEN, configuration);
+  param.begin();
+  param.load();
+  SPIFFS.end();
 
-  bool success = true;
-  if (!readFirstLineFromFile(wifiSsid, "/ssid.txt"))            success = false;
-  if (!readFirstLineFromFile(wifiPassword, "/pwd.txt"))         success = false;
-  if (!readFirstIpFromFile(staticIP, "/ip.txt"))                success = false;
-  if (!readFirstIpFromFile(gateway, "/gateway.txt"))            success = false;
-  if (!readFirstIpFromFile(subnet, "/subnet.txt"))              success = false;
-
-  if (!readFirstLineFromFile(thingsboardServer, "/server.txt")) success = false;
-  if (!readFirstLineFromFile(token, "/token.txt"))              success = false;
-
-  if (!readFirstPositiveIntegerFromFile(intervalMs, "/intervalMs.txt"))    success = false;
-  if (intervalMs < 1)
+  if (!staticIP.fromString(configuration["staticIP"]))
   {
-    Serial.println("ERROR: measurement interval is " + String(intervalMs) + " but must be >0");
-    success = false;
+    printError("ERROR: couldn't convert staticIP(\"" + configuration["staticIP"] + "\") to IP address");
+    return false;
+  }
+
+  if (!gateway.fromString(configuration["gateway"]))
+  {
+    printError("ERROR: couldn't convert gateway(\"" + configuration["gateway"] + "\") to IP address");
+    return false;
+  }
+
+  if (!subnet.fromString(configuration["subnet"]))
+  {
+    printError("ERROR: couldn't convert subnet(\"" + configuration["subnet"] + "\") to IP address");
+    return false;
   }
   
-  if (debug) Serial.println("reading configuration files from SPIFFS - done.");
-  return success;
-}
-
-bool openFile(File & f, String fileName)
-{
-  if (debug) Serial.println("reading file \"" + fileName + "\"");
-  f = SPIFFS.open(fileName, "r");
-  if (!f) {
-    Serial.println("ERROR: couldn't open file \"" + fileName + "\"");
-    f.close();
-    return false;
-  }
-  return true;
-}
-
-bool readFirstLineFromFile(String & ret, String fileName)
-{
-  File f;
-  if (!openFile(f, fileName)) return false;
-  ret = f.readString();
-  ret = ret.substring(0, ret.indexOf('\r'));
-  ret = ret.substring(0, ret.indexOf('\n'));
-  f.close();
-  return true;
-}
-
-bool readFirstPositiveIntegerFromFile(long & ret, String fileName)
-{
-  String sNumber;
-  if (!readFirstLineFromFile(sNumber, fileName)) return false;
-  else if ((ret = sNumber.toInt()) <= 0)
+  interval = configuration["interval"].toInt();
+  if (interval <= 0)
   {
-    Serial.println("ERROR: couldn't convert \"" + sNumber + "\" to positive integer");
+    printError("ERROR: couldn't convert interval(\"" + configuration["interval"] + "\") to integer >0");
     return false;
   }
+
+  warnThreshold = configuration["warnThreshold"].toFloat();
+  if (warnThreshold < 0.0f || warnThreshold > 100.0f)
+  {
+    printError("ERROR: couldn't convert warnThreshold(\"" + configuration["warnThreshold"] + "\") to float >0 and <100");
+    return false;
+  }
+
+  if (!digitalRead(FORCE_CFG))
+  {
+    printError("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
+    return false;
+  }
+
+  printDebug("reading configuration files from SPIFFS - done.");
   return true;
 }
 
-bool readFirstIpFromFile(IPAddress & ret, String fileName)
+void runConfigAP()
 {
-  String sAddr;
-  if (!readFirstLineFromFile(sAddr, fileName)) return false;
-  else if (!ret.fromString(sAddr))
+  display.init();
+  if (configuration["flipScreen"] == "true") display.flipScreenVertically();
+  display.setBrightness(1);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.setFont(ArialMT_Plain_10);
+  display.clear();
+
+  String ssid(SSID_PREFIX);
+  ssid += WiFi.macAddress();
+  ssid.replace(":", "");
+  ssid.toLowerCase();
+
+  display.drawString(0, 0, "Edit configuration on SSID");
+  display.drawString(0, 11, ssid);
+  display.drawString(0, 22, "browse http://10.1.1.1");
+  
+  display.normalDisplay();
+  display.display();
+
+  if (ESPBootstrap.run(configuration, NCONFIG-1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
   {
-    Serial.println("ERROR: couldn't convert \"" + sAddr + "\" to IP address");
-    return false;
+    SPIFFS.begin();
+    ParametersSPIFFS param(TOKEN, configuration);
+    param.begin();
+    param.save();
+    SPIFFS.end();
   }
-  return true;
+
+  delay(5000);
+  ESP.restart();
 }
 
 void getAndReportSensorDataThenSleep()
 {
-  startCconnectWiFi();  
+  startConnectWiFi();  
   
   bme.begin();
   
-  if (debug) Serial.println("Acquire new sensor data...");
+  printDebug("Acquire new sensor data...");
   // pressure in hPa
   float pressure = NAN;
   // temperature in Celsius
@@ -174,21 +188,21 @@ void getAndReportSensorDataThenSleep()
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
   delay(1000);
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
-  if (debug) Serial.println("Measured: pres=" + String(pressure,2) + "hPa, temp=" + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
+  printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp=" + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
 
   displayMeasurements(humidity, temperature, pressure);
-  reportMeasurements(humidity, temperature, pressure);
+  if (!reportMeasurements(humidity, temperature, pressure)) return;
   
-  long sleepMs = intervalMs - millis();
+  long sleepMs = (interval * 1000) - millis();
   if (sleepMs < 1) sleepMs = 1;
-  if (debug) Serial.println("Entering deep sleep for " + String(sleepMs) + "ms...");
+  printDebug("Entering deep sleep for " + String(sleepMs) + "ms...");
   ESP.deepSleep(static_cast<uint64_t>(sleepMs) * 1000);
 }
 
 void displayMeasurements(float hum, float temp, float pres)
 {
   display.init();
-  display.flipScreenVertically();
+  if (configuration["flipScreen"] == "true") display.flipScreenVertically();
   display.setBrightness(1);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.setFont(ArialMT_Plain_10);
@@ -202,35 +216,41 @@ void displayMeasurements(float hum, float temp, float pres)
   if (!isnan(temp)) display.drawString(40, 11, String(temp,2)+" °C");
   if (!isnan(pres)) display.drawString(40, 22, String(pres,0)+" hPa");
 
-  if (hum>60.0f) display.invertDisplay();
-  else display.normalDisplay();
+  if (hum>warnThreshold)
+  {
+    display.setFont(ArialMT_Plain_24);
+    display.drawString(100, 4, "!!!");
+    display.invertDisplay();
+  }
+  else
+  {
+    display.normalDisplay();
+  }
   
   display.display();
 }
 
-void reportMeasurements(float hum, float temp, float pres)
+bool reportMeasurements(float hum, float temp, float pres)
 {
-  if (debug) Serial.println("Transmit to server...");
+  printDebug("Transmit to server...");
   
   if (isnan(hum) || isnan(temp) || isnan(pres))
   {
-    if (debug) Serial.println("ERROR: Sensor read failed, faulty data not transmitted!");
-    return;
+    printDebug("ERROR: Sensor read failed, faulty data not transmitted!");
+    return false;
   }
 
   // wait for WiFi connection
-  waitConnectWiFi();
+  if (!waitConnectWiFi()) return false;
 
   // connecting to ThingsBoard
   ThingsBoard tb(wifiClient);
-  if (debug)
+  printDebug("Connecting to ThingsBoard...");
+  if (debug) digitalWrite(LED_ST_1, HIGH);
+
+  if (tb.connect(configuration["thingsboardServer"].c_str(), configuration["thingsboardToken"].c_str()))
   {
-    Serial.println("Connecting to ThingsBoard...");
-    digitalWrite(LED_ST_1, HIGH);
-  }
-  if (tb.connect(thingsboardServer.c_str(), token.c_str()))
-  {
-    if (debug) Serial.println("Sending data to ThingsBoard...");
+    printDebug("Sending data to ThingsBoard...");
     // sending data to ThingsBoard
     const int data_items = 3;
     Telemetry data[data_items] =
@@ -241,53 +261,77 @@ void reportMeasurements(float hum, float temp, float pres)
     };
     tb.sendTelemetry(data, data_items);
   }
-  else if (debug)
+  else
   {
-    Serial.println("Connecting to ThingsBoard failed!");
-    digitalWrite(LED_ST_1, LOW);
+    printDebug("Connecting to ThingsBoard failed!");
+    if (debug) digitalWrite(LED_ST_1, LOW);
   }
 
   // disconnecting from ThingsBoard
-  if (debug) Serial.println("Disconnecting from ThingsBoard...");
+  printDebug("Disconnecting from ThingsBoard...");
   tb.disconnect();
   digitalWrite(LED_ST_1, LOW);
   
   // disconnecting from WiFi
   disconnectWiFi();
   
-  if (debug) Serial.println("Transmit to server - done.");
+  printDebug("Transmit to server - done.");
+  return true;
 }
 
-bool startCconnectWiFi()
+void startConnectWiFi()
 {
-  if (debug)
-  {
-    digitalWrite(LED_ST_0, HIGH);
-    Serial.println("Connecting to WiFi...");
-  }
+  printDebug("Connecting to WiFi...");
+  if (debug) digitalWrite(LED_ST_0, HIGH);
 
   // attempt to connect to WiFi network
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.config(staticIP, gateway, subnet);
-  WiFi.begin(wifiSsid, wifiPassword);
+  WiFi.begin(configuration["wifiSsid"].c_str(), configuration["wifiPassword"].c_str());
 }
 
 bool waitConnectWiFi()
 {
-  if (debug) Serial.println("Wait for WiFi...");
-  while (WiFi.status() != WL_CONNECTED) delay(10);
-  if (debug)
+  printDebug("Wait for WiFi...");
+  unsigned long timeout = millis() + 5000;
+  while (WiFi.status() != WL_CONNECTED)
   {
-    Serial.setDebugOutput(false);
-    Serial.println("Connecting to WiFi - done.");
+    if (millis() > timeout)
+    {
+      printDebug("WiFi timeout!");
+      return false;
+    }
+    delay(10);
   }
+
+  if (debug) Serial.setDebugOutput(false);
+  printDebug("Connecting to WiFi - done.");
+  return true;
 }
 
 void disconnectWiFi()
 {
-  if (debug) Serial.println("Disconnecting from WiFi.");
+  printDebug("Disconnecting from WiFi.");
   WiFi.disconnect(true);
   delay(1);
   digitalWrite(LED_ST_0, LOW);
+}
+
+void printError(const String & s)
+{
+  unsigned long time = millis();
+  int milliseconds = time % 1000;
+  int seconds = (time / 1000) % 60;
+  int minutes = (time / 1000 / 60) % 60;
+  int hours = time / 1000 / 60 / 60;
+  char buf[32];
+  sprintf(buf,"%4d:%02d:%02d.%03d ", hours, minutes, seconds, milliseconds);
+  Serial.print(buf);
+  Serial.println(s);
+}
+
+void printDebug(const String & s)
+{
+  if (debug) printError(s);
 }

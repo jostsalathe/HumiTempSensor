@@ -17,10 +17,11 @@ Dictionary configuration(NCONFIG);
 #define LED_ST_0 4
 #define LED_ST_1 5
 #define GPIO12 12
-#define FORCE_CFG 13
+#define GPIO13 13
 #define DEBUG_EN 14
 #define SDA 2
 #define SCL 0
+#define FORCE_CFG 0
 
 WiFiClient wifiClient;
 IPAddress staticIP, gateway, subnet;
@@ -47,10 +48,11 @@ unsigned int interval;
 
 float warnThreshold;
 
+
+
 void setup()
 {
   pinMode(DEBUG_EN, INPUT_PULLUP);
-  pinMode(FORCE_CFG, INPUT_PULLUP);
   // internally pulled high - solder bridge open
   debug = !digitalRead(DEBUG_EN);
   pinMode(LED_ST_0, OUTPUT);
@@ -63,12 +65,21 @@ void setup()
 
   if (readConfig()) getAndReportSensorDataThenSleep();
 
-  printError("entering configuration mode...");
   runConfigAP();
 }
 
 void loop()
 {
+}
+
+bool isForceConfig()
+{
+  if (!digitalRead(FORCE_CFG))
+  {
+    printError("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
+    return true;
+  }
+  return false;
 }
 
 bool readConfig()
@@ -126,11 +137,7 @@ bool readConfig()
     return false;
   }
 
-  if (!digitalRead(FORCE_CFG))
-  {
-    printError("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
-    return false;
-  }
+  if (isForceConfig()) return false;
 
   printDebug("reading configuration files from SPIFFS - done.");
   return true;
@@ -138,6 +145,7 @@ bool readConfig()
 
 void runConfigAP()
 {
+  printError("Getting new configuration...");
   display.init();
   if (configuration["flipScreen"] == "true") display.flipScreenVertically();
   display.setBrightness(1);
@@ -150,29 +158,38 @@ void runConfigAP()
   ssid.replace(":", "");
   ssid.toLowerCase();
 
+  printError("Print message to display...");
   display.drawString(0, 0, "Edit configuration on SSID");
   display.drawString(0, 11, ssid);
   display.drawString(0, 22, "browse http://10.1.1.1");
   
   display.normalDisplay();
   display.display();
+  printError("Print message to display - done.");
 
+  printError(String("Starting access point with SSID \"") + ssid + String("\""));
+  printError("Open http://10.1.1.1 in your browser to configure your device.");
   if (ESPBootstrap.run(configuration, NCONFIG-1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
   {
+    printError(String("Received new configuration: ") + configuration.json());
+    printError("Write new configuration to SPIFFS...");
     SPIFFS.begin();
     ParametersSPIFFS param(TOKEN, configuration);
     param.begin();
     param.save();
     SPIFFS.end();
+    printError("Write new configuration to SPIFFS - done.");
   }
 
+  printError("Getting new configuration - done.");
   delay(5000);
+  printError("Restarting device...");
   ESP.restart();
 }
 
 void getAndReportSensorDataThenSleep()
 {
-  startConnectWiFi();  
+  startConnectWiFi();
   
   bme.begin();
   
@@ -185,13 +202,20 @@ void getAndReportSensorDataThenSleep()
   float humidity = NAN;
 
   // read sensor
+  if (isForceConfig()) return;
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
-  delay(1000);
+  if (isForceConfig()) return;
+  delay(100);
+  if (isForceConfig()) return;
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+  if (isForceConfig()) return;
   printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp=" + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
 
+  if (isForceConfig()) return;
   displayMeasurements(humidity, temperature, pressure);
+  if (isForceConfig()) return;
   if (!reportMeasurements(humidity, temperature, pressure)) return;
+  if (isForceConfig()) return;
   
   long sleepMs = (interval * 1000) - millis();
   if (sleepMs < 1) sleepMs = 1;
@@ -201,25 +225,41 @@ void getAndReportSensorDataThenSleep()
 
 void displayMeasurements(float hum, float temp, float pres)
 {
+  printDebug("Display data...");
   display.init();
   if (configuration["flipScreen"] == "true") display.flipScreenVertically();
   display.setBrightness(1);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_10);
   display.clear();
 
-  display.drawString(0, 0, "Humi:");
-  display.drawString(0, 11, "Temp:");
-  display.drawString(0, 22, "Pres:");
+  String sTemp(temp,1);
+  if (temp < 10.0f) sTemp = "0" + sTemp;
+
+  String sHum(hum,1);
+  if (hum >= 100.0f) sHum = "99.9";
+  if (hum < 10.0f) sHum = "0" + sHum;
   
-  if (!isnan(hum)) display.drawString(40, 0, String(hum,2)+" %");
-  if (!isnan(temp)) display.drawString(40, 11, String(temp,2)+" °C");
-  if (!isnan(pres)) display.drawString(40, 22, String(pres,0)+" hPa");
+  display.setFont(ArialMT_Plain_24);
+  int wHum = display.getStringWidth(sHum);
+  int wTemp = display.getStringWidth(sTemp);
+  display.drawString(2, 9, sTemp);
+  display.drawString(125-wHum, 9, sHum);
+
+  display.setFont(ArialMT_Plain_10);
+  String sHumText = "% hum";
+  String sTempText = "°C temp";
+  int wHumText = display.getStringWidth(sHumText);
+  int wTempText = display.getStringWidth(sTempText);
+  display.drawString(4, 0, sTempText);
+  display.drawString(123-wHumText, 0, sHumText);
 
   if (hum>warnThreshold)
   {
-    display.setFont(ArialMT_Plain_24);
-    display.drawString(100, 4, "!!!");
+    display.setFont(ArialMT_Plain_10);
+    String sWarn = "WARN!";
+    int wWarn = display.getStringWidth(sWarn);
+    int pWarn = (127-wTempText-wHumText)/2 + wTempText - wWarn/2;
+    display.drawString(pWarn, 0, sWarn);
     display.invertDisplay();
   }
   else
@@ -228,6 +268,7 @@ void displayMeasurements(float hum, float temp, float pres)
   }
   
   display.display();
+  printDebug("Display data - done.");
 }
 
 bool reportMeasurements(float hum, float temp, float pres)
@@ -237,11 +278,11 @@ bool reportMeasurements(float hum, float temp, float pres)
   if (isnan(hum) || isnan(temp) || isnan(pres))
   {
     printDebug("ERROR: Sensor read failed, faulty data not transmitted!");
-    return false;
+    return true;
   }
 
   // wait for WiFi connection
-  if (!waitConnectWiFi()) return false;
+  if (!waitConnectWiFi()) return true;
 
   // connecting to ThingsBoard
   ThingsBoard tb(wifiClient);
@@ -252,14 +293,14 @@ bool reportMeasurements(float hum, float temp, float pres)
   {
     printDebug("Sending data to ThingsBoard...");
     // sending data to ThingsBoard
-    const int data_items = 3;
-    Telemetry data[data_items] =
+    const int DATA_ITEMS = 3;
+    Telemetry data[DATA_ITEMS] =
     {
       {"temperature", temp},
       {"humidity",    hum},
       {"pressure",    pres}
     };
-    tb.sendTelemetry(data, data_items);
+    tb.sendTelemetry(data, DATA_ITEMS);
   }
   else
   {
@@ -285,7 +326,7 @@ void startConnectWiFi()
   if (debug) digitalWrite(LED_ST_0, HIGH);
 
   // attempt to connect to WiFi network
-  WiFi.persistent(false);
+  WiFi.persistent(true);
   WiFi.mode(WIFI_STA);
   WiFi.config(staticIP, gateway, subnet);
   WiFi.begin(configuration["wifiSsid"].c_str(), configuration["wifiPassword"].c_str());
@@ -293,15 +334,30 @@ void startConnectWiFi()
 
 bool waitConnectWiFi()
 {
+  int remainigRetries = 3;
   printDebug("Wait for WiFi...");
-  unsigned long timeout = millis() + 5000;
+  const unsigned long TIMEOUT = 5000;
+  unsigned long timeoutEnd = millis() + TIMEOUT;
+
   while (WiFi.status() != WL_CONNECTED)
   {
-    if (millis() > timeout)
+    if (WiFi.status() == WL_CONNECT_FAILED && remainigRetries > 0)
     {
-      printDebug("WiFi timeout!");
+      WiFi.reconnect();
+
+      printError("WiFi connect failed! Retry...");
+      --remainigRetries;
+      timeoutEnd = millis() + TIMEOUT;
+    }
+
+    if (millis() > timeoutEnd)
+    {
+      printError("WiFi timeout with WiFi.status(" + String(WiFi.status()) + ")!");
       return false;
     }
+
+    if (isForceConfig()) return false;
+    
     delay(10);
   }
 
@@ -312,9 +368,9 @@ bool waitConnectWiFi()
 
 void disconnectWiFi()
 {
-  printDebug("Disconnecting from WiFi.");
-  WiFi.disconnect(true);
-  delay(1);
+  // printDebug("Disconnecting from WiFi.");
+  // WiFi.disconnect(true);
+  // delay(1);
   digitalWrite(LED_ST_0, LOW);
 }
 

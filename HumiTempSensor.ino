@@ -3,7 +3,7 @@
 #include <SSD1306Wire.h>
 #include <ESP8266WiFi.h>
 #include <ThingsBoard.h>
-#include <ParametersSPIFFS.h>
+#include <LittleFS.h>
 #include <EspBootstrapDict.h>
 
 
@@ -38,7 +38,7 @@ BME280I2C::Settings bmeSettings(
   BME280I2C::StandbyTime_1000ms,
   BME280I2C::Filter_Off,
   BME280I2C::SpiEnable_False,
-  0x76 // I2C address. (0x76 is default, 0x77 alternative)
+  (BME280I2C::I2CAddr)0x76 // I2C address. (0x76 is default, 0x77 alternative)
 );
 BME280I2C bme(bmeSettings);
 
@@ -86,24 +86,44 @@ bool readConfig()
 {
   printDebug("reading configuration files from SPIFFS...");
 
-  configuration("Title", "HumiTempSensor Configuration");
-  configuration("wifiSsid", "your WIFI SSID");
-  configuration("wifiPassword", "your WIFI password");
-  configuration("staticIP", "192.168.0.42");
-  configuration("gateway", "192.168.0.1");
-  configuration("subnet", "255.255.255.0");
-  configuration("thingsboardServer", "thingsboard-server.hostname");
-  configuration("thingsboardToken", "your thingsboard sensor token");
-  configuration("interval", "10");
-  configuration("warnThreshold", "65");
-  configuration("flipScreen", "false");
-
-  // try loading config from SPIFFS
-  SPIFFS.begin();
-  ParametersSPIFFS param(TOKEN, configuration);
-  param.begin();
-  param.load();
-  SPIFFS.end();
+  if (LittleFS.exists("/config.json"))
+  {
+    Serial.println("reading config file");
+    File configFile = LittleFS.open("/config.json", "r");
+    if (configFile)
+    {
+      Serial.println("opened config file");
+      DynamicJsonDocument jsonDoc(2048);
+      auto error = deserializeJson(jsonDoc, configFile);
+      serializeJsonPretty(jsonDoc, Serial);
+      if (!error)
+      {
+        Serial.println("\nparsed json");
+        configuration("Title", "HumiTempSensor Configuration");
+        configuration("wifiSsid", "your WIFI SSID");
+        configuration("wifiPassword", "your WIFI password");
+        configuration("staticIP", "192.168.0.42");
+        configuration("gateway", "192.168.0.1");
+        configuration("subnet", "255.255.255.0");
+        configuration("thingsboardServer", "thingsboard-server.hostname");
+        configuration("thingsboardToken", "your thingsboard sensor token");
+        configuration("interval", "10");
+        configuration("warnThreshold", "65");
+        configuration("flipScreen", "false");
+      }
+      else
+      {
+        Serial.print("failed to load json config with code ");
+        Serial.print(error.c_str());
+        Serial.println(" - using default configuration.");
+      }
+    }
+    else
+    {
+      Serial.println("failed to open /config.json - using default configuration.");
+    }
+    configFile.close();
+  }
 
   if (!staticIP.fromString(configuration["staticIP"]))
   {
@@ -143,6 +163,37 @@ bool readConfig()
   return true;
 }
 
+void saveConfig()
+{
+  Serial.println("writing config file");
+  File configFile = LittleFS.open("/config.json", "w");
+  if (configFile)
+  {
+    Serial.println("opened config file");
+    DynamicJsonDocument jsonDoc(2048);
+    jsonDoc["Title"] = configuration("Title");
+    jsonDoc["wifiSsid"] = configuration("wifiSsid");
+    jsonDoc["wifiPassword"] = configuration("wifiPassword");
+    jsonDoc["staticIP"] = configuration("staticIP");
+    jsonDoc["gateway"] = configuration("gateway");
+    jsonDoc["subnet"] = configuration("subnet");
+    jsonDoc["thingsboardServer"] = configuration("thingsboardServer");
+    jsonDoc["thingsboardToken"] = configuration("thingsboardToken");
+    jsonDoc["interval"] = configuration("interval");
+    jsonDoc["warnThreshold"] = configuration("warnThreshold");
+    jsonDoc["flipScreen"] = configuration("flipScreen");
+    serializeJsonPretty(jsonDoc, Serial);
+    Serial.println("\nfilled json");
+    serializeJson(jsonDoc, configFile);
+    Serial.println("wrote config file");
+  }
+  else
+  {
+    Serial.println("failed to open /config.json.");
+  }
+  configFile.close();
+}
+
 void runConfigAP()
 {
   printError("Getting new configuration...");
@@ -173,11 +224,7 @@ void runConfigAP()
   {
     printError(String("Received new configuration: ") + configuration.json());
     printError("Write new configuration to SPIFFS...");
-    SPIFFS.begin();
-    ParametersSPIFFS param(TOKEN, configuration);
-    param.begin();
-    param.save();
-    SPIFFS.end();
+    saveConfig();
     printError("Write new configuration to SPIFFS - done.");
   }
 

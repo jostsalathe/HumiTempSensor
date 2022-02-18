@@ -32,3 +32,4 @@ I recommend using some wire to mount the sensor with a few centimeters distance 
 - The ESP should restart and, if configured correctly, report its measurements regularly from now on
 - If it encounters an error, it will open a configuration access point, again
 - You can always force configuration mode by pulling pin 0 low after reset (e.g. by pressing the boot mode button)
+- Baud rate is 74880

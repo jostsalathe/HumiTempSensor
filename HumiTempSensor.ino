@@ -14,14 +14,14 @@ Dictionary _configuration(NCONFIG);
 
 
 // === pinout definitions =============================
-#define LED_ST_0 4
-#define LED_ST_1 5
-#define GPIO12 12
-#define GPIO13 13
-#define DEBUG_EN 14
-#define SDA 2
-#define SCL 0
-#define FORCE_CFG 0
+#define LED_ST_0   4
+#define LED_ST_1   5
+#define GPIO12    12
+#define GPIO13    13
+#define DEBUG_EN  14
+#define SDA        2
+#define SCL        0
+#define FORCE_CFG  0
 
 WiFiClient _wifiClient;
 IPAddress _staticIP, _gateway, _subnet;
@@ -102,6 +102,9 @@ bool isForceConfig()
  */
 bool readConfig()
 {
+  // beginning LittleFS once should be sufficient. And as this function is called on program start
+  // this solution should be enough
+  LittleFS.begin();
   printDebug("reading configuration files from SPIFFS...");
 
   if (LittleFS.exists("/config.json"))
@@ -141,6 +144,21 @@ bool readConfig()
       Serial.println("failed to open /config.json - using default configuration.");
     }
     configFile.close();
+  }
+  else // does not exist. fill dictionary with defaults
+  {
+    _configuration("Title", "HumiTempSensor Configuration");
+    _configuration("wifiSsid", "your WIFI SSID");
+    _configuration("wifiPassword", "your WIFI password");
+    _configuration("staticIP", "192.168.0.42");
+    _configuration("gateway", "192.168.0.1");
+    _configuration("subnet", "255.255.255.0");
+    _configuration("thingsboardServer", "thingsboard-server.hostname");
+    _configuration("thingsboardToken", "your thingsboard sensor token");
+    _configuration("interval", "10");
+    _configuration("warnThreshold", "65");
+    _configuration("flipScreen", "false");
+    return false;
   }
 
   if (!_staticIP.fromString(_configuration["staticIP"]))
@@ -246,7 +264,7 @@ void runConfigAP()
 
   logToSerial(String("Starting access point with SSID \"") + ssid + String("\""));
   logToSerial("Open http://10.1.1.1 in your browser to configure your device.");
-  if (ESPBootstrap.run(_configuration, NCONFIG-1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
+  if (ESPBootstrap.run(_configuration, NCONFIG - 1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
   {
     logToSerial(String("Received new configuration: ") + _configuration.json());
     logToSerial("Write new configuration to SPIFFS...");
@@ -286,7 +304,8 @@ void getAndReportSensorDataThenSleep()
   if (isForceConfig()) return;
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
   if (isForceConfig()) return;
-  printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp=" + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
+  printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp="
+             + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
 
   if (isForceConfig()) return;
   displayMeasurements(humidity, temperature, pressure);

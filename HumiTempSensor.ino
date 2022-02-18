@@ -10,7 +10,7 @@
 const String TOKEN("HumiTempSensorV2");
 
 const int NCONFIG = 11;
-Dictionary configuration(NCONFIG);
+Dictionary _configuration(NCONFIG);
 
 
 // === pinout definitions =============================
@@ -23,14 +23,14 @@ Dictionary configuration(NCONFIG);
 #define SCL 0
 #define FORCE_CFG 0
 
-WiFiClient wifiClient;
-IPAddress staticIP, gateway, subnet;
+WiFiClient _wifiClient;
+IPAddress _staticIP, _gateway, _subnet;
 
 // === construct SSD1306 OLED. ========================
-SSD1306Wire display(0x3c, SDA, SCL, GEOMETRY_128_32);
+SSD1306Wire _display(0x3c, SDA, SCL, GEOMETRY_128_32);
 
 // === construct BME280I2C sensor.
-BME280I2C::Settings bmeSettings(
+BME280I2C::Settings _bmeSettings(
   BME280I2C::OSR_X1, // temp oversampling
   BME280I2C::OSR_X1, // humidity oversampling
   BME280I2C::OSR_X1, // pressure oversampling
@@ -40,21 +40,23 @@ BME280I2C::Settings bmeSettings(
   BME280I2C::SpiEnable_False,
   (BME280I2C::I2CAddr)0x76 // I2C address. (0x76 is default, 0x77 alternative)
 );
-BME280I2C bme(bmeSettings);
+BME280I2C bme(_bmeSettings);
 
-bool debug = true;
+bool _debug = true;      //!< whether debug output should be printed, or not
 
-unsigned int interval;
+unsigned int _interval; //!< measurement interval
 
-float warnThreshold;
+float _warnThreshold;   //!< when to output a warning
 
-
-
+/**
+ * @brief init of entire program
+ * 
+ */
 void setup()
 {
   pinMode(DEBUG_EN, INPUT_PULLUP);
   // internally pulled high - solder bridge open
-  debug = !digitalRead(DEBUG_EN);
+  _debug = !digitalRead(DEBUG_EN);
   pinMode(LED_ST_0, OUTPUT);
   pinMode(LED_ST_1, OUTPUT);
   digitalWrite(LED_ST_0, LOW);
@@ -68,20 +70,36 @@ void setup()
   runConfigAP();
 }
 
+/**
+ * @brief nothing to do here.... yet
+ * 
+ */
 void loop()
 {
 }
 
+/**
+ * @brief checks, whether config shall be forced
+ * 
+ * @return true, if FORCE_CFG pin is HIGH
+ * @return false, else
+ */
 bool isForceConfig()
 {
   if (!digitalRead(FORCE_CFG))
   {
-    printError("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
+    logToSerial("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
     return true;
   }
   return false;
 }
 
+/**
+ * @brief read config from module's flash
+ * 
+ * @return true, if settings were made and seem valid
+ * @return false, if settings files either does not exist or seems invalid
+ */
 bool readConfig()
 {
   printDebug("reading configuration files from SPIFFS...");
@@ -99,17 +117,17 @@ bool readConfig()
       if (!error)
       {
         Serial.println("\nparsed json");
-        configuration("Title", "HumiTempSensor Configuration");
-        configuration("wifiSsid", "your WIFI SSID");
-        configuration("wifiPassword", "your WIFI password");
-        configuration("staticIP", "192.168.0.42");
-        configuration("gateway", "192.168.0.1");
-        configuration("subnet", "255.255.255.0");
-        configuration("thingsboardServer", "thingsboard-server.hostname");
-        configuration("thingsboardToken", "your thingsboard sensor token");
-        configuration("interval", "10");
-        configuration("warnThreshold", "65");
-        configuration("flipScreen", "false");
+        _configuration("Title", "HumiTempSensor Configuration");
+        _configuration("wifiSsid", "your WIFI SSID");
+        _configuration("wifiPassword", "your WIFI password");
+        _configuration("staticIP", "192.168.0.42");
+        _configuration("gateway", "192.168.0.1");
+        _configuration("subnet", "255.255.255.0");
+        _configuration("thingsboardServer", "thingsboard-server.hostname");
+        _configuration("thingsboardToken", "your thingsboard sensor token");
+        _configuration("interval", "10");
+        _configuration("warnThreshold", "65");
+        _configuration("flipScreen", "false");
       }
       else
       {
@@ -125,35 +143,35 @@ bool readConfig()
     configFile.close();
   }
 
-  if (!staticIP.fromString(configuration["staticIP"]))
+  if (!_staticIP.fromString(_configuration["staticIP"]))
   {
-    printError("ERROR: couldn't convert staticIP(\"" + configuration["staticIP"] + "\") to IP address");
+    logToSerial("ERROR: couldn't convert staticIP(\"" + _configuration["staticIP"] + "\") to IP address");
     return false;
   }
 
-  if (!gateway.fromString(configuration["gateway"]))
+  if (!_gateway.fromString(_configuration["gateway"]))
   {
-    printError("ERROR: couldn't convert gateway(\"" + configuration["gateway"] + "\") to IP address");
+    logToSerial("ERROR: couldn't convert gateway(\"" + _configuration["gateway"] + "\") to IP address");
     return false;
   }
 
-  if (!subnet.fromString(configuration["subnet"]))
+  if (!_subnet.fromString(_configuration["subnet"]))
   {
-    printError("ERROR: couldn't convert subnet(\"" + configuration["subnet"] + "\") to IP address");
+    logToSerial("ERROR: couldn't convert subnet(\"" + _configuration["subnet"] + "\") to IP address");
     return false;
   }
   
-  interval = configuration["interval"].toInt();
-  if (interval <= 0)
+  _interval = _configuration["interval"].toInt();
+  if (_interval <= 0)
   {
-    printError("ERROR: couldn't convert interval(\"" + configuration["interval"] + "\") to integer >0");
+    logToSerial("ERROR: couldn't convert interval(\"" + _configuration["interval"] + "\") to integer >0");
     return false;
   }
 
-  warnThreshold = configuration["warnThreshold"].toFloat();
-  if (warnThreshold < 0.0f || warnThreshold > 100.0f)
+  _warnThreshold = _configuration["warnThreshold"].toFloat();
+  if (_warnThreshold < 0.0f || _warnThreshold > 100.0f)
   {
-    printError("ERROR: couldn't convert warnThreshold(\"" + configuration["warnThreshold"] + "\") to float >0 and <100");
+    logToSerial("ERROR: couldn't convert warnThreshold(\"" + _configuration["warnThreshold"] + "\") to float >0 and <100");
     return false;
   }
 
@@ -163,6 +181,10 @@ bool readConfig()
   return true;
 }
 
+/**
+ * @brief saves config to json file on chip module's flash
+ * 
+ */
 void saveConfig()
 {
   Serial.println("writing config file");
@@ -171,17 +193,17 @@ void saveConfig()
   {
     Serial.println("opened config file");
     DynamicJsonDocument jsonDoc(2048);
-    jsonDoc["Title"] = configuration("Title");
-    jsonDoc["wifiSsid"] = configuration("wifiSsid");
-    jsonDoc["wifiPassword"] = configuration("wifiPassword");
-    jsonDoc["staticIP"] = configuration("staticIP");
-    jsonDoc["gateway"] = configuration("gateway");
-    jsonDoc["subnet"] = configuration("subnet");
-    jsonDoc["thingsboardServer"] = configuration("thingsboardServer");
-    jsonDoc["thingsboardToken"] = configuration("thingsboardToken");
-    jsonDoc["interval"] = configuration("interval");
-    jsonDoc["warnThreshold"] = configuration("warnThreshold");
-    jsonDoc["flipScreen"] = configuration("flipScreen");
+    jsonDoc["Title"] = _configuration("Title");
+    jsonDoc["wifiSsid"] = _configuration("wifiSsid");
+    jsonDoc["wifiPassword"] = _configuration("wifiPassword");
+    jsonDoc["staticIP"] = _configuration("staticIP");
+    jsonDoc["gateway"] = _configuration("gateway");
+    jsonDoc["subnet"] = _configuration("subnet");
+    jsonDoc["thingsboardServer"] = _configuration("thingsboardServer");
+    jsonDoc["thingsboardToken"] = _configuration("thingsboardToken");
+    jsonDoc["interval"] = _configuration("interval");
+    jsonDoc["warnThreshold"] = _configuration("warnThreshold");
+    jsonDoc["flipScreen"] = _configuration("flipScreen");
     serializeJsonPretty(jsonDoc, Serial);
     Serial.println("\nfilled json");
     serializeJson(jsonDoc, configFile);
@@ -194,46 +216,54 @@ void saveConfig()
   configFile.close();
 }
 
+/**
+ * @brief runs access point so WiFi settings can be made
+ * 
+ */
 void runConfigAP()
 {
-  printError("Getting new configuration...");
-  display.init();
-  if (configuration["flipScreen"] == "true") display.flipScreenVertically();
-  display.setBrightness(1);
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_10);
-  display.clear();
+  logToSerial("Getting new configuration...");
+  _display.init();
+  if (_configuration["flipScreen"] == "true") _display.flipScreenVertically();
+  _display.setBrightness(1);
+  _display.setTextAlignment(TEXT_ALIGN_LEFT);
+  _display.setFont(ArialMT_Plain_10);
+  _display.clear();
 
   String ssid(SSID_PREFIX);
   ssid += WiFi.macAddress();
   ssid.replace(":", "");
   ssid.toLowerCase();
 
-  printError("Print message to display...");
-  display.drawString(0, 0, "Edit configuration on SSID");
-  display.drawString(0, 11, ssid);
-  display.drawString(0, 22, "browse http://10.1.1.1");
+  logToSerial("Print message to display...");
+  _display.drawString(0, 0, "Edit configuration on SSID");
+  _display.drawString(0, 11, ssid);
+  _display.drawString(0, 22, "browse http://10.1.1.1");
   
-  display.normalDisplay();
-  display.display();
-  printError("Print message to display - done.");
+  _display.normalDisplay();
+  _display.display();
+  logToSerial("Print message to display - done.");
 
-  printError(String("Starting access point with SSID \"") + ssid + String("\""));
-  printError("Open http://10.1.1.1 in your browser to configure your device.");
-  if (ESPBootstrap.run(configuration, NCONFIG-1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
+  logToSerial(String("Starting access point with SSID \"") + ssid + String("\""));
+  logToSerial("Open http://10.1.1.1 in your browser to configure your device.");
+  if (ESPBootstrap.run(_configuration, NCONFIG-1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
   {
-    printError(String("Received new configuration: ") + configuration.json());
-    printError("Write new configuration to SPIFFS...");
+    logToSerial(String("Received new configuration: ") + _configuration.json());
+    logToSerial("Write new configuration to SPIFFS...");
     saveConfig();
-    printError("Write new configuration to SPIFFS - done.");
+    logToSerial("Write new configuration to SPIFFS - done.");
   }
 
-  printError("Getting new configuration - done.");
+  logToSerial("Getting new configuration - done.");
   delay(5000);
-  printError("Restarting device...");
+  logToSerial("Restarting device...");
   ESP.restart();
 }
 
+/**
+ * @brief core function. gets data, sends data, displays data and then goes sleeping
+ * 
+ */
 void getAndReportSensorDataThenSleep()
 {
   startConnectWiFi();
@@ -264,20 +294,27 @@ void getAndReportSensorDataThenSleep()
   if (!reportMeasurements(humidity, temperature, pressure)) return;
   if (isForceConfig()) return;
   
-  long sleepMs = (interval * 1000) - millis();
+  long sleepMs = (_interval * 1000) - millis();
   if (sleepMs < 1) sleepMs = 1;
   printDebug("Entering deep sleep for " + String(sleepMs) + "ms...");
   ESP.deepSleep(static_cast<uint64_t>(sleepMs) * 1000);
 }
 
+/**
+ * @brief writes values to display
+ * 
+ * @param hum relative humidity in %
+ * @param temp temperature in °C
+ * @param pres pressure is in hPa
+ */
 void displayMeasurements(float hum, float temp, float pres)
 {
   printDebug("Display data...");
-  display.init();
-  if (configuration["flipScreen"] == "true") display.flipScreenVertically();
-  display.setBrightness(1);
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.clear();
+  _display.init();
+  if (_configuration["flipScreen"] == "true") _display.flipScreenVertically();
+  _display.setBrightness(1);
+  _display.setTextAlignment(TEXT_ALIGN_LEFT);
+  _display.clear();
 
   String sTemp(temp,1);
   if (temp < 10.0f) sTemp = "0" + sTemp;
@@ -286,38 +323,47 @@ void displayMeasurements(float hum, float temp, float pres)
   if (hum >= 100.0f) sHum = "99.9";
   if (hum < 10.0f) sHum = "0" + sHum;
   
-  display.setFont(ArialMT_Plain_24);
-  int wHum = display.getStringWidth(sHum);
-  int wTemp = display.getStringWidth(sTemp);
-  display.drawString(2, 9, sTemp);
-  display.drawString(125-wHum, 9, sHum);
+  _display.setFont(ArialMT_Plain_24);
+  int wHum = _display.getStringWidth(sHum);
+  int wTemp = _display.getStringWidth(sTemp);
+  _display.drawString(2, 9, sTemp);
+  _display.drawString(125-wHum, 9, sHum);
 
-  display.setFont(ArialMT_Plain_10);
+  _display.setFont(ArialMT_Plain_10);
   String sHumText = "% hum";
   String sTempText = "°C temp";
-  int wHumText = display.getStringWidth(sHumText);
-  int wTempText = display.getStringWidth(sTempText);
-  display.drawString(4, 0, sTempText);
-  display.drawString(123-wHumText, 0, sHumText);
+  int wHumText = _display.getStringWidth(sHumText);
+  int wTempText = _display.getStringWidth(sTempText);
+  _display.drawString(4, 0, sTempText);
+  _display.drawString(123-wHumText, 0, sHumText);
 
-  if (hum>warnThreshold)
+  if (hum>_warnThreshold)
   {
-    display.setFont(ArialMT_Plain_10);
+    _display.setFont(ArialMT_Plain_10);
     String sWarn = "WARN!";
-    int wWarn = display.getStringWidth(sWarn);
+    int wWarn = _display.getStringWidth(sWarn);
     int pWarn = (127-wTempText-wHumText)/2 + wTempText - wWarn/2;
-    display.drawString(pWarn, 0, sWarn);
-    display.invertDisplay();
+    _display.drawString(pWarn, 0, sWarn);
+    _display.invertDisplay();
   }
   else
   {
-    display.normalDisplay();
+    _display.normalDisplay();
   }
   
-  display.display();
+  _display.display();
   printDebug("Display data - done.");
 }
 
+/**
+ * @brief sends data to Things board
+ * 
+ * @param hum relative humidity in %
+ * @param temp temperature in °C
+ * @param pres pressure is in hPa
+ * @return true, always
+ * @return false, never
+ */
 bool reportMeasurements(float hum, float temp, float pres)
 {
   printDebug("Transmit to server...");
@@ -332,11 +378,11 @@ bool reportMeasurements(float hum, float temp, float pres)
   if (!waitConnectWiFi()) return true;
 
   // connecting to ThingsBoard
-  ThingsBoard tb(wifiClient);
+  ThingsBoard tb(_wifiClient);
   printDebug("Connecting to ThingsBoard...");
-  if (debug) digitalWrite(LED_ST_1, HIGH);
+  if (_debug) digitalWrite(LED_ST_1, HIGH);
 
-  if (tb.connect(configuration["thingsboardServer"].c_str(), configuration["thingsboardToken"].c_str()))
+  if (tb.connect(_configuration["thingsboardServer"].c_str(), _configuration["thingsboardToken"].c_str()))
   {
     printDebug("Sending data to ThingsBoard...");
     // sending data to ThingsBoard
@@ -352,7 +398,7 @@ bool reportMeasurements(float hum, float temp, float pres)
   else
   {
     printDebug("Connecting to ThingsBoard failed!");
-    if (debug) digitalWrite(LED_ST_1, LOW);
+    if (_debug) digitalWrite(LED_ST_1, LOW);
   }
 
   // disconnecting from ThingsBoard
@@ -367,16 +413,20 @@ bool reportMeasurements(float hum, float temp, float pres)
   return true;
 }
 
+/**
+ * @brief initiates WiFi connection with several retries, if necessary
+ * 
+ */
 void startConnectWiFi()
 {
   printDebug("Connecting to WiFi...");
-  if (debug) digitalWrite(LED_ST_0, HIGH);
+  if (_debug) digitalWrite(LED_ST_0, HIGH);
 
   // attempt to connect to WiFi network
   WiFi.persistent(true);
   WiFi.mode(WIFI_STA);
-  WiFi.config(staticIP, gateway, subnet);
-  WiFi.begin(configuration["wifiSsid"].c_str(), configuration["wifiPassword"].c_str());
+  WiFi.config(_staticIP, _gateway, _subnet);
+  WiFi.begin(_configuration["wifiSsid"].c_str(), _configuration["wifiPassword"].c_str());
 }
 
 bool waitConnectWiFi()
@@ -392,14 +442,14 @@ bool waitConnectWiFi()
     {
       WiFi.reconnect();
 
-      printError("WiFi connect failed! Retry...");
+      logToSerial("WiFi connect failed! Retry...");
       --remainigRetries;
       timeoutEnd = millis() + TIMEOUT;
     }
 
     if (millis() > timeoutEnd)
     {
-      printError("WiFi timeout with WiFi.status(" + String(WiFi.status()) + ")!");
+      logToSerial("WiFi timeout with WiFi.status(" + String(WiFi.status()) + ")!");
       return false;
     }
 
@@ -408,11 +458,15 @@ bool waitConnectWiFi()
     delay(10);
   }
 
-  if (debug) Serial.setDebugOutput(false);
+  if (_debug) Serial.setDebugOutput(false);
   printDebug("Connecting to WiFi - done.");
   return true;
 }
 
+/**
+ * @brief should disconnect from WiFi, but currently does not. Pulls down LED_ST_0
+ * 
+ */
 void disconnectWiFi()
 {
   // printDebug("Disconnecting from WiFi.");
@@ -421,7 +475,13 @@ void disconnectWiFi()
   digitalWrite(LED_ST_0, LOW);
 }
 
-void printError(const String & s)
+/**
+ * @brief logs to Serial whilst adding a time stamp
+ * 
+ * @param logTxt String to print to Serial
+ * @sa Serial.println()
+ */
+void logToSerial(const String & logTxt)
 {
   unsigned long time = millis();
   int milliseconds = time % 1000;
@@ -431,10 +491,16 @@ void printError(const String & s)
   char buf[32];
   sprintf(buf,"%4d:%02d:%02d.%03d ", hours, minutes, seconds, milliseconds);
   Serial.print(buf);
-  Serial.println(s);
+  Serial.println(logTxt);
 }
 
-void printDebug(const String & s)
+/**
+ * @brief convenience wrapper to only logToSerial, when _debug is set
+ *
+ * @param debugTxt String to print to Serial
+ * @sa logToSerial()
+ */
+void printDebug(const String & debugTxt)
 {
-  if (debug) printError(s);
+  if (_debug) logToSerial(debugTxt);
 }

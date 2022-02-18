@@ -80,8 +80,8 @@ void loop()
 
 /**
  * @brief checks, whether config shall be forced
- * 
- * @return true, if FORCE_CFG pin is HIGH
+ * @details Usage is: Release reset and immediately after press Boot button -> should reset config
+ * @return true, if FORCE_CFG (aka Boot button) pin is HIGH
  * @return false, else
  */
 bool isForceConfig()
@@ -211,17 +211,18 @@ void saveConfig()
   {
     Serial.println("opened config file");
     DynamicJsonDocument jsonDoc(2048);
-    jsonDoc["Title"] = _configuration("Title");
-    jsonDoc["wifiSsid"] = _configuration("wifiSsid");
-    jsonDoc["wifiPassword"] = _configuration("wifiPassword");
-    jsonDoc["staticIP"] = _configuration("staticIP");
-    jsonDoc["gateway"] = _configuration("gateway");
-    jsonDoc["subnet"] = _configuration("subnet");
-    jsonDoc["thingsboardServer"] = _configuration("thingsboardServer");
-    jsonDoc["thingsboardToken"] = _configuration("thingsboardToken");
-    jsonDoc["interval"] = _configuration("interval");
-    jsonDoc["warnThreshold"] = _configuration("warnThreshold");
-    jsonDoc["flipScreen"] = _configuration("flipScreen");
+    printDebug(String("Search result for wifiSSid") + _configuration.search("wifiSsid"));
+    jsonDoc["Title"] = _configuration.search("Title");
+    jsonDoc["wifiSsid"] = _configuration.search("wifiSsid");
+    jsonDoc["wifiPassword"] = _configuration.search("wifiPassword");
+    jsonDoc["staticIP"] = _configuration.search("staticIP");
+    jsonDoc["gateway"] = _configuration.search("gateway");
+    jsonDoc["subnet"] = _configuration.search("subnet");
+    jsonDoc["thingsboardServer"] = _configuration.search("thingsboardServer");
+    jsonDoc["thingsboardToken"] = _configuration.search("thingsboardToken");
+    jsonDoc["interval"] = _configuration.search("interval");
+    jsonDoc["warnThreshold"] = _configuration.search("warnThreshold");
+    jsonDoc["flipScreen"] = _configuration.search("flipScreen");
     serializeJsonPretty(jsonDoc, Serial);
     Serial.println("\nfilled json");
     serializeJson(jsonDoc, configFile);

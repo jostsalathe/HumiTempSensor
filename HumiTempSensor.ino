@@ -3,50 +3,57 @@
 #include <SSD1306Wire.h>
 #include <ESP8266WiFi.h>
 #include <ThingsBoard.h>
-#include <LittleFS.h>
-#include <EspBootstrapDict.h>
+// #include <LittleFS.h> // Apparently, deprecation of SPIFFS is just a compiler warning for now.
+#include <ParametersSPIFFS.h> // Compiler output suggests that there is a problem with Dictionary.h (supplied by Arduino) which seems to be missing the header guard for some reason.
+#include <EspBootstrapDict.h> // This is a problem because both ParametersSPIFFS.h and EspBootstrapDict.h include Dictionary.h.
+// === I opend an issue about this here: https://github.com/arkhipenko/EspBootstrap/issues/3
 
+const String TOKEN("HumiTempSensorV3"); //!< configuration version token to prevent misconfiguration after firmware upgrade
 
-const String TOKEN("HumiTempSensorV2");
-
-const int NCONFIG = 11;
-Dictionary _configuration(NCONFIG);
+const int N_CONFIG = 12;                //!< number of configuration parameters including config page title
+Dictionary _configuration(N_CONFIG);    //!< holds configuration during runtime 
 
 
 // === pinout definitions =============================
-#define LED_ST_0   4
-#define LED_ST_1   5
-#define GPIO12    12
-#define GPIO13    13
-#define DEBUG_EN  14
-#define SDA        2
-#define SCL        0
-#define FORCE_CFG  0
+const uint8_t LED_ST_0              =  4; //!< status LED pin (active HIGH)
+const uint8_t LED_ST_1              =  5; //!< status LED pin (active HIGH)
+const uint8_t GPIO12                = 12; //!< unused GPIO pin
+const uint8_t GPIO13                = 13; //!< unused GPIO pin
+const uint8_t DEBUG_EN              = 14; //!< debug enable pin / solder bridge (active LOW)
+const uint8_t DISPLAY_SENSOR_DATA   =  2; //!< data pin for IIC (display and sensor)
+const uint8_t DISPLAY_SENSOR_CLOCK  =  0; //!< clock pin for IIC (display and sensor)
+const uint8_t FORCE_CFG             =  0; //!< force configuration AP pin / button (active LOW)
 
 WiFiClient _wifiClient;
 IPAddress _staticIP, _gateway, _subnet;
 
 // === construct SSD1306 OLED. ========================
-SSD1306Wire _display(0x3c, SDA, SCL, GEOMETRY_128_32);
+SSD1306Wire _display(0x3c, DISPLAY_SENSOR_DATA, DISPLAY_SENSOR_CLOCK, GEOMETRY_128_32);
 
 // === construct BME280I2C sensor.
 BME280I2C::Settings _bmeSettings(
-  BME280I2C::OSR_X1, // temp oversampling
-  BME280I2C::OSR_X1, // humidity oversampling
-  BME280I2C::OSR_X1, // pressure oversampling
+  BME280I2C::OSR_X1,              // temp oversampling
+  BME280I2C::OSR_X1,              // humidity oversampling
+  BME280I2C::OSR_X1,              // pressure oversampling
   BME280I2C::Mode_Forced,
   BME280I2C::StandbyTime_1000ms,
   BME280I2C::Filter_Off,
   BME280I2C::SpiEnable_False,
-  (BME280I2C::I2CAddr)0x76 // I2C address. (0x76 is default, 0x77 alternative)
+  (BME280I2C::I2CAddr)0x76        // I2C address. (0x76 is default, 0x77 alternative)
 );
 BME280I2C bme(_bmeSettings);
 
-bool _debug = true;      //!< whether debug output should be printed, or not
+bool _debug = true;       //!< whether debug output should be printed, or not (determined on reset by DEBUG_EN pin)
 
-unsigned int _interval; //!< measurement interval
+bool _stayAwake = true;   //!< whether the device should stay awake between measurements instead of deep sleeping
 
-float _warnThreshold;   //!< when to output a warning
+unsigned long _interval;  //!< measurement interval in seconds
+
+float _warnThreshold;     //!< humidity threshold at which to show a warning on the display
+
+unsigned long _nextMeasurement = 0; //!< time point of next measurement according to millis()
+
+
 
 /**
  * @brief init of entire program
@@ -63,25 +70,45 @@ void setup()
   digitalWrite(LED_ST_1, LOW);
   
   Serial.begin(74880);
-  Wire.begin(SDA, SCL);
+  Wire.begin(DISPLAY_SENSOR_DATA, DISPLAY_SENSOR_CLOCK);
 
-  if (readConfig()) getAndReportSensorDataThenSleep();
+  if (!readConfig()) runConfigAPAndRestart();
 
-  runConfigAP();
+  startConnectWiFi();
 }
 
 /**
- * @brief nothing to do here.... yet
+ * @brief running the config AP if requested, measuring, reporting
+ * @details if deep sleep is enabled, this should run exactly once and goes to deep sleep after that
  * 
  */
 void loop()
 {
+  if (isForceConfig())
+  {
+    runConfigAPAndRestart();
+  }
+  else if (_nextMeasurement <= millis())
+  {
+    _nextMeasurement += _interval * 1000;
+    
+    getAndReportSensorData();
+
+    if (!_stayAwake)
+    {
+      long sleepMs = _nextMeasurement - millis();
+      if (sleepMs < 1) sleepMs = 1;
+      printDebug("Entering deep sleep for " + String(sleepMs) + "ms...");
+      ESP.deepSleep(static_cast<uint64_t>(sleepMs) * 1000);
+    }
+  }
 }
 
 /**
- * @brief checks, whether config shall be forced
- * @details Usage is: Release reset and immediately after press Boot button -> should reset config
- * @return true, if FORCE_CFG (aka Boot button) pin is HIGH
+ * @brief checks, whether config AP shall be forced
+ * @details Usage is: Release reset and then immediately press and hold Boot button
+ * until status LEDs alternatingly flash at 1 Hz, then release boot button -> should start config AP
+ * @return true, if FORCE_CFG (aka Boot button) pin is LOW (pressed), returns as soon as it is HIGH again
  * @return false, else
  */
 bool isForceConfig()
@@ -89,6 +116,15 @@ bool isForceConfig()
   if (!digitalRead(FORCE_CFG))
   {
     logToSerial("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
+    digitalWrite(LED_ST_0, HIGH);
+    while(!digitalRead(FORCE_CFG))
+    {
+      delay(500);
+      digitalWrite(LED_ST_0, !digitalRead(LED_ST_0));
+      digitalWrite(LED_ST_1, !digitalRead(LED_ST_1));
+    }
+    digitalWrite(LED_ST_0, LOW);
+    digitalWrite(LED_ST_1, LOW);
     return true;
   }
   return false;
@@ -102,64 +138,30 @@ bool isForceConfig()
  */
 bool readConfig()
 {
-  // beginning LittleFS once should be sufficient. And as this function is called on program start
-  // this solution should be enough
-  LittleFS.begin();
-  printDebug("reading configuration files from SPIFFS...");
+  printDebug("reading configuration files from Flash...");
 
-  if (LittleFS.exists("/config.json"))
-  {
-    Serial.println("reading config file");
-    File configFile = LittleFS.open("/config.json", "r");
-    if (configFile)
-    {
-      Serial.println("opened config file");
-      DynamicJsonDocument jsonDoc(2048);
-      auto error = deserializeJson(jsonDoc, configFile);
-      serializeJsonPretty(jsonDoc, Serial);
-      if (!error)
-      {
-        Serial.println("\nparsed json");
-        _configuration("Title", "HumiTempSensor Configuration");
-        _configuration("wifiSsid", "your WIFI SSID");
-        _configuration("wifiPassword", "your WIFI password");
-        _configuration("staticIP", "192.168.0.42");
-        _configuration("gateway", "192.168.0.1");
-        _configuration("subnet", "255.255.255.0");
-        _configuration("thingsboardServer", "thingsboard-server.hostname");
-        _configuration("thingsboardToken", "your thingsboard sensor token");
-        _configuration("interval", "10");
-        _configuration("warnThreshold", "65");
-        _configuration("flipScreen", "false");
-      }
-      else
-      {
-        Serial.print("failed to load json config with code ");
-        Serial.print(error.c_str());
-        Serial.println(" - using default configuration.");
-      }
-    }
-    else
-    {
-      Serial.println("failed to open /config.json - using default configuration.");
-    }
-    configFile.close();
-  }
-  else // does not exist. fill dictionary with defaults
-  {
-    _configuration("Title", "HumiTempSensor Configuration");
-    _configuration("wifiSsid", "your WIFI SSID");
-    _configuration("wifiPassword", "your WIFI password");
-    _configuration("staticIP", "192.168.0.42");
-    _configuration("gateway", "192.168.0.1");
-    _configuration("subnet", "255.255.255.0");
-    _configuration("thingsboardServer", "thingsboard-server.hostname");
-    _configuration("thingsboardToken", "your thingsboard sensor token");
-    _configuration("interval", "10");
-    _configuration("warnThreshold", "65");
-    _configuration("flipScreen", "false");
-    return false;
-  }
+  // filling the configuration dictionary with defaults
+  _configuration("Title", "HumiTempSensor Configuration");
+  _configuration("wifiSsid", "your WIFI SSID");
+  _configuration("wifiPassword", "your WIFI password");
+  _configuration("staticIP", "192.168.0.42");
+  _configuration("gateway", "192.168.0.1");
+  _configuration("subnet", "255.255.255.0");
+  _configuration("thingsboardServer", "thingsboard-server.hostname");
+  _configuration("thingsboardToken", "your thingsboard sensor token");
+  _configuration("interval", "10");
+  _configuration("stayAwake", "true");
+  _configuration("warnThreshold", "65");
+  _configuration("flipScreen", "false");
+
+  // try loading configuration from LittleFS
+  // LittleFS.begin();
+  SPIFFS.begin();
+  ParametersSPIFFS param(TOKEN, _configuration);
+  param.begin();
+  param.load();
+  // LittleFS.end();
+  SPIFFS.end();
 
   if (!_staticIP.fromString(_configuration["staticIP"]))
   {
@@ -186,6 +188,8 @@ bool readConfig()
     return false;
   }
 
+  _stayAwake = _configuration["stayAwake"] == "true";
+
   _warnThreshold = _configuration["warnThreshold"].toFloat();
   if (_warnThreshold < 0.0f || _warnThreshold > 100.0f)
   {
@@ -195,7 +199,7 @@ bool readConfig()
 
   if (isForceConfig()) return false;
 
-  printDebug("reading configuration files from SPIFFS - done.");
+  printDebug("reading configuration files from Flash - done.");
   return true;
 }
 
@@ -205,41 +209,22 @@ bool readConfig()
  */
 void saveConfig()
 {
-  Serial.println("writing config file");
-  File configFile = LittleFS.open("/config.json", "w");
-  if (configFile)
-  {
-    Serial.println("opened config file");
-    DynamicJsonDocument jsonDoc(2048);
-    printDebug(String("Search result for wifiSSid") + _configuration.search("wifiSsid"));
-    jsonDoc["Title"] = _configuration.search("Title");
-    jsonDoc["wifiSsid"] = _configuration.search("wifiSsid");
-    jsonDoc["wifiPassword"] = _configuration.search("wifiPassword");
-    jsonDoc["staticIP"] = _configuration.search("staticIP");
-    jsonDoc["gateway"] = _configuration.search("gateway");
-    jsonDoc["subnet"] = _configuration.search("subnet");
-    jsonDoc["thingsboardServer"] = _configuration.search("thingsboardServer");
-    jsonDoc["thingsboardToken"] = _configuration.search("thingsboardToken");
-    jsonDoc["interval"] = _configuration.search("interval");
-    jsonDoc["warnThreshold"] = _configuration.search("warnThreshold");
-    jsonDoc["flipScreen"] = _configuration.search("flipScreen");
-    serializeJsonPretty(jsonDoc, Serial);
-    Serial.println("\nfilled json");
-    serializeJson(jsonDoc, configFile);
-    Serial.println("wrote config file");
-  }
-  else
-  {
-    Serial.println("failed to open /config.json.");
-  }
-  configFile.close();
+  logToSerial("Write new configuration to Flash...");
+  // LittleFS.begin();
+  SPIFFS.begin();
+  ParametersSPIFFS param(TOKEN, _configuration);
+  param.begin();
+  param.save();
+  // LittleFS.end();
+  SPIFFS.end();
+  logToSerial("Write new configuration to Flash - done.");
 }
 
 /**
- * @brief runs access point so WiFi settings can be made
+ * @brief runs access point so WiFi settings can be made and restarts the Processor afterwards
  * 
  */
-void runConfigAP()
+void runConfigAPAndRestart()
 {
   logToSerial("Getting new configuration...");
   _display.init();
@@ -265,12 +250,14 @@ void runConfigAP()
 
   logToSerial(String("Starting access point with SSID \"") + ssid + String("\""));
   logToSerial("Open http://10.1.1.1 in your browser to configure your device.");
-  if (ESPBootstrap.run(_configuration, NCONFIG - 1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
+  if (ESPBootstrap.run(_configuration, N_CONFIG - 1, 10 * BOOTSTRAP_MINUTE) == BOOTSTRAP_OK)
   {
     logToSerial(String("Received new configuration: ") + _configuration.json());
-    logToSerial("Write new configuration to SPIFFS...");
     saveConfig();
-    logToSerial("Write new configuration to SPIFFS - done.");
+  }
+  else
+  {
+    logToSerial("No new configuration received before timeout.");
   }
 
   logToSerial("Getting new configuration - done.");
@@ -280,13 +267,11 @@ void runConfigAP()
 }
 
 /**
- * @brief core function. gets data, sends data, displays data and then goes sleeping
+ * @brief Core function. Gets data, sends data and displays data
  * 
  */
-void getAndReportSensorDataThenSleep()
+void getAndReportSensorData()
 {
-  startConnectWiFi();
-  
   bme.begin();
   
   printDebug("Acquire new sensor data...");
@@ -298,26 +283,21 @@ void getAndReportSensorDataThenSleep()
   float humidity = NAN;
 
   // read sensor
-  if (isForceConfig()) return;
+  if (isForceConfig()) runConfigAPAndRestart();
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
-  if (isForceConfig()) return;
+  if (isForceConfig()) runConfigAPAndRestart();
   delay(100);
-  if (isForceConfig()) return;
+  if (isForceConfig()) runConfigAPAndRestart();
   bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
-  if (isForceConfig()) return;
+  if (isForceConfig()) runConfigAPAndRestart();
   printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp="
              + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
 
-  if (isForceConfig()) return;
+  if (isForceConfig()) runConfigAPAndRestart();
   displayMeasurements(humidity, temperature, pressure);
-  if (isForceConfig()) return;
-  if (!reportMeasurements(humidity, temperature, pressure)) return;
-  if (isForceConfig()) return;
-  
-  long sleepMs = (_interval * 1000) - millis();
-  if (sleepMs < 1) sleepMs = 1;
-  printDebug("Entering deep sleep for " + String(sleepMs) + "ms...");
-  ESP.deepSleep(static_cast<uint64_t>(sleepMs) * 1000);
+  if (isForceConfig()) runConfigAPAndRestart();
+  reportMeasurements(humidity, temperature, pressure);
+  if (isForceConfig()) runConfigAPAndRestart();
 }
 
 /**
@@ -381,21 +361,19 @@ void displayMeasurements(float hum, float temp, float pres)
  * @param hum relative humidity in %
  * @param temp temperature in °C
  * @param pres pressure is in hPa
- * @return true, always
- * @return false, never
  */
-bool reportMeasurements(float hum, float temp, float pres)
+void reportMeasurements(float hum, float temp, float pres)
 {
   printDebug("Transmit to server...");
   
   if (isnan(hum) || isnan(temp) || isnan(pres))
   {
     printDebug("ERROR: Sensor read failed, faulty data not transmitted!");
-    return true;
+    return;
   }
 
   // wait for WiFi connection
-  if (!waitConnectWiFi()) return true;
+  if (!waitConnectWiFi()) return;
 
   // connecting to ThingsBoard
   ThingsBoard tb(_wifiClient);
@@ -430,7 +408,7 @@ bool reportMeasurements(float hum, float temp, float pres)
   disconnectWiFi();
   
   printDebug("Transmit to server - done.");
-  return true;
+  return;
 }
 
 /**
@@ -473,7 +451,7 @@ bool waitConnectWiFi()
       return false;
     }
 
-    if (isForceConfig()) return false;
+    if (isForceConfig()) runConfigAPAndRestart();
     
     delay(10);
   }

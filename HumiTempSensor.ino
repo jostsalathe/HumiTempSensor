@@ -3,10 +3,8 @@
 #include <SSD1306Wire.h>
 #include <ESP8266WiFi.h>
 #include <ThingsBoard.h>
-// #include <LittleFS.h> // Apparently, deprecation of SPIFFS is just a compiler warning for now.
-#include <ParametersSPIFFS.h> // Compiler output suggests that there is a problem with Dictionary.h (supplied by Arduino) which seems to be missing the header guard for some reason.
-#include <EspBootstrapDict.h> // This is a problem because both ParametersSPIFFS.h and EspBootstrapDict.h include Dictionary.h.
-// === I opend an issue about this here: https://github.com/arkhipenko/EspBootstrap/issues/3
+#include <ParametersSPIFFS.h>
+#include <EspBootstrapDict.h>
 
 const String TOKEN("HumiTempSensorV3"); //!< configuration version token to prevent misconfiguration after firmware upgrade
 
@@ -43,14 +41,13 @@ BME280I2C::Settings _bmeSettings(
 );
 BME280I2C bme(_bmeSettings);
 
+// === construct ThingsBoard endpoint with 128 byte payload size and support for 3 Fields
+ThingsBoardSized<128, 3> tb(_wifiClient); //!< endpoint for connection to ThingsBoard
+
 bool _debug = true;       //!< whether debug output should be printed, or not (determined on reset by DEBUG_EN pin)
-
 bool _stayAwake = true;   //!< whether the device should stay awake between measurements instead of deep sleeping
-
 unsigned long _interval;  //!< measurement interval in seconds
-
 float _warnThreshold;     //!< humidity threshold at which to show a warning on the display
-
 unsigned long _nextMeasurement = 0; //!< time point of next measurement according to millis()
 
 
@@ -96,6 +93,13 @@ void loop()
 
     if (!_stayAwake)
     {
+      // disconnecting from ThingsBoard
+      printDebug("Disconnecting from ThingsBoard...");
+      tb.disconnect();
+
+      // preparing deep sleep
+      digitalWrite(LED_ST_0, LOW);
+      digitalWrite(LED_ST_1, LOW);
       long sleepMs = _nextMeasurement - millis();
       if (sleepMs < 1) sleepMs = 1;
       printDebug("Entering deep sleep for " + String(sleepMs) + "ms...");
@@ -116,12 +120,20 @@ bool isForceConfig()
   if (!digitalRead(FORCE_CFG))
   {
     logToSerial("forced config mode by pulling pin " + String(FORCE_CFG) + " low!");
-    digitalWrite(LED_ST_0, HIGH);
     while(!digitalRead(FORCE_CFG))
     {
-      delay(500);
-      digitalWrite(LED_ST_0, !digitalRead(LED_ST_0));
-      digitalWrite(LED_ST_1, !digitalRead(LED_ST_1));
+      // blinking LEDs alternatingly at 1 Hz
+      if (millis()%1000<500)
+      {
+        digitalWrite(LED_ST_0, HIGH);
+        digitalWrite(LED_ST_1, LOW);
+      }
+      else
+      {
+        digitalWrite(LED_ST_0, LOW);
+        digitalWrite(LED_ST_1, HIGH);
+      }
+      delay(10);
     }
     digitalWrite(LED_ST_0, LOW);
     digitalWrite(LED_ST_1, LOW);
@@ -154,7 +166,7 @@ bool readConfig()
   _configuration("warnThreshold", "65");
   _configuration("flipScreen", "false");
 
-  // try loading configuration from LittleFS
+  // try loading configuration from Flash
   // LittleFS.begin();
   SPIFFS.begin();
   ParametersSPIFFS param(TOKEN, _configuration);
@@ -376,37 +388,34 @@ void reportMeasurements(float hum, float temp, float pres)
   if (!waitConnectWiFi()) return;
 
   // connecting to ThingsBoard
-  ThingsBoard tb(_wifiClient);
-  printDebug("Connecting to ThingsBoard...");
-  if (_debug) digitalWrite(LED_ST_1, HIGH);
+  if (_debug) digitalWrite(LED_ST_1, tb.connected());
 
-  if (tb.connect(_configuration["thingsboardServer"].c_str(), _configuration["thingsboardToken"].c_str()))
+  if (!tb.connected())
   {
-    printDebug("Sending data to ThingsBoard...");
-    // sending data to ThingsBoard
-    const int DATA_ITEMS = 3;
-    Telemetry data[DATA_ITEMS] =
+    printDebug("Connecting to ThingsBoard...");
+    // need to connect
+    if (!tb.connect(_configuration["thingsboardServer"].c_str(), _configuration["thingsboardToken"].c_str()))
     {
-      {"temperature", temp},
-      {"humidity",    hum},
-      {"pressure",    pres}
-    };
-    tb.sendTelemetry(data, DATA_ITEMS);
-  }
-  else
-  {
-    printDebug("Connecting to ThingsBoard failed!");
-    if (_debug) digitalWrite(LED_ST_1, LOW);
+      // could not connect
+      printDebug("Connecting to ThingsBoard failed!");
+      if (_debug) digitalWrite(LED_ST_1, tb.connected());
+      return;
+    }
   }
 
-  // disconnecting from ThingsBoard
-  printDebug("Disconnecting from ThingsBoard...");
-  tb.disconnect();
-  digitalWrite(LED_ST_1, LOW);
-  
-  // disconnecting from WiFi
-  disconnectWiFi();
-  
+  printDebug("Sending data to ThingsBoard...");
+  // sending data to ThingsBoard
+  const int DATA_ITEMS = 3;
+  Telemetry data[DATA_ITEMS] =
+  {
+    {"temperature", temp},
+    {"humidity",    hum},
+    {"pressure",    pres}
+  };
+  tb.sendTelemetry(data, DATA_ITEMS);
+
+  if (_debug) digitalWrite(LED_ST_1, tb.connected());
+
   printDebug("Transmit to server - done.");
   return;
 }
@@ -418,7 +427,7 @@ void reportMeasurements(float hum, float temp, float pres)
 void startConnectWiFi()
 {
   printDebug("Connecting to WiFi...");
-  if (_debug) digitalWrite(LED_ST_0, HIGH);
+  if (_debug) digitalWrite(LED_ST_0, WiFi.status() == WL_CONNECTED);
 
   // attempt to connect to WiFi network
   WiFi.persistent(true);
@@ -429,13 +438,24 @@ void startConnectWiFi()
 
 bool waitConnectWiFi()
 {
+  // immediately return if already connected
+  if (WiFi.status() == WL_CONNECTED) return true;
+
   int remainigRetries = 3;
   printDebug("Wait for WiFi...");
   const unsigned long TIMEOUT = 5000;
   unsigned long timeoutEnd = millis() + TIMEOUT;
 
+  // wait until WiFi is connected
   while (WiFi.status() != WL_CONNECTED)
   {
+    if (_debug)
+    {
+      // flash LED_ST_0 with 1 Hz
+      if (millis() % 1000 < 100) digitalWrite(LED_ST_0, HIGH);
+      else digitalWrite(LED_ST_0, LOW);
+    }
+    // try a reconnect if necessary and still wanted
     if (WiFi.status() == WL_CONNECT_FAILED && remainigRetries > 0)
     {
       WiFi.reconnect();
@@ -445,32 +465,24 @@ bool waitConnectWiFi()
       timeoutEnd = millis() + TIMEOUT;
     }
 
+    // last try to reconnect is too long ago - just give up, already
     if (millis() > timeoutEnd)
     {
       logToSerial("WiFi timeout with WiFi.status(" + String(WiFi.status()) + ")!");
+      digitalWrite(LED_ST_0, LOW);
       return false;
     }
 
+    // run the configuration AP if forced by button press
     if (isForceConfig()) runConfigAPAndRestart();
     
     delay(10);
   }
 
+  if (_debug) digitalWrite(LED_ST_0, HIGH);
   if (_debug) Serial.setDebugOutput(false);
   printDebug("Connecting to WiFi - done.");
   return true;
-}
-
-/**
- * @brief should disconnect from WiFi, but currently does not. Pulls down LED_ST_0
- * 
- */
-void disconnectWiFi()
-{
-  // printDebug("Disconnecting from WiFi.");
-  // WiFi.disconnect(true);
-  // delay(1);
-  digitalWrite(LED_ST_0, LOW);
 }
 
 /**

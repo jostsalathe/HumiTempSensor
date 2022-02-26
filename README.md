@@ -8,7 +8,7 @@ You need the following software components:
 - [ThingsBoard Arduino MQTT SDK](https://github.com/thingsboard/ThingsBoard-Arduino-MQTT-SDK)
 - [ThingPulse esp8266 ssd1306 oled library](https://github.com/ThingPulse/esp8266-oled-ssd1306)
 - [BME280 library by Tyler Glenn](https://github.com/finitespace/BME280)
-- [Dictionary library by Anatoli Arkhipenko](https://github.com/arkhipenko/Dictionary)
+- [Dictionary library by Anatoli Arkhipenko](https://github.com/arkhipenko/Dictionary) CAUTION! Use version 3.4.0 for now since v 3.5.0 introduced problems that are not resolved, yet!
 - [EspBootstrap library by Anatoli Arkhipenko](https://github.com/arkhipenko/EspBootstrap)
 - [ThingsBoard server](https://thingsboard.io/) where the sensor can post its data and where you can view that data on dashboards
 - A token for the sensor that is registered in your ThingsBoard

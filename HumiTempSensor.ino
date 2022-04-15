@@ -1,4 +1,12 @@
+#define SENSOR_TYPE_BME280
+//#define SENSOR_TYPE_DHT22
+
+#ifdef SENSOR_TYPE_BME280
 #include <BME280I2C.h>
+#endif
+#ifdef SENSOR_TYPE_DHT22
+#include <DHT.h>
+#endif
 #include <Wire.h>
 #include <SSD1306Wire.h>
 #include <ESP8266WiFi.h>
@@ -28,7 +36,8 @@ IPAddress _staticIP, _gateway, _subnet;
 // === construct SSD1306 OLED. ========================
 SSD1306Wire _display(0x3c, DISPLAY_SENSOR_DATA, DISPLAY_SENSOR_CLOCK, GEOMETRY_128_32);
 
-// === construct BME280I2C sensor.
+// === construct sensor. ==============================
+#ifdef SENSOR_TYPE_BME280
 BME280I2C::Settings _bmeSettings(
   BME280I2C::OSR_X1,              // temp oversampling
   BME280I2C::OSR_X1,              // humidity oversampling
@@ -39,7 +48,13 @@ BME280I2C::Settings _bmeSettings(
   BME280I2C::SpiEnable_False,
   (BME280I2C::I2CAddr)0x76        // I2C address. (0x76 is default, 0x77 alternative)
 );
-BME280I2C bme(_bmeSettings);
+BME280I2C sensor(_bmeSettings);
+#endif
+
+#ifdef SENSOR_TYPE_DHT22
+#define SENSOR_PIN GPIO13
+DHT sensor(SENSOR_PIN, DHT22);
+#endif
 
 // === construct ThingsBoard endpoint with 128 byte payload size and support for 3 Fields
 ThingsBoardSized<128, 3> tb(_wifiClient); //!< endpoint for connection to ThingsBoard
@@ -72,6 +87,8 @@ void setup()
   if (!readConfig()) runConfigAPAndRestart();
 
   startConnectWiFi();
+  
+  sensor.begin();
 }
 
 /**
@@ -284,8 +301,6 @@ void runConfigAPAndRestart()
  */
 void getAndReportSensorData()
 {
-  bme.begin();
-  
   printDebug("Acquire new sensor data...");
   // pressure in hPa
   float pressure = NAN;
@@ -296,14 +311,25 @@ void getAndReportSensorData()
 
   // read sensor
   if (isForceConfig()) runConfigAPAndRestart();
-  bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+#ifdef SENSOR_TYPE_BME280
+  sensor.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
   if (isForceConfig()) runConfigAPAndRestart();
   delay(100);
   if (isForceConfig()) runConfigAPAndRestart();
-  bme.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+  sensor.read(pressure, temperature, humidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+#endif
+#ifdef SENSOR_TYPE_DHT22
+  temperature = sensor.readTemperature();
+  sensor.read();
+  humidity = sensor.readHumidity();
+#endif
   if (isForceConfig()) runConfigAPAndRestart();
-  printDebug("Measured: pres=" + String(pressure,2) + "hPa, temp="
-             + String(temperature,2) + "°C, hum=" + String(humidity,2) + "%");
+  printDebug("Measured: "
+#ifdef SENSOR_TYPE_BME280
+             "pres=" + String(pressure,2) + "hPa, "
+#endif
+             "temp=" + String(temperature,2) + "°C, "
+             "hum=" + String(humidity,2) + "%");
 
   if (isForceConfig()) runConfigAPAndRestart();
   displayMeasurements(humidity, temperature, pressure);
@@ -378,7 +404,12 @@ void reportMeasurements(float hum, float temp, float pres)
 {
   printDebug("Transmit to server...");
   
-  if (isnan(hum) || isnan(temp) || isnan(pres))
+  if (isnan(hum)
+      || isnan(temp)
+#ifdef SENSOR_TYPE_BME280
+      || isnan(pres)
+#endif
+  )
   {
     printDebug("ERROR: Sensor read failed, faulty data not transmitted!");
     return;
@@ -409,8 +440,10 @@ void reportMeasurements(float hum, float temp, float pres)
   Telemetry data[DATA_ITEMS] =
   {
     {"temperature", temp},
-    {"humidity",    hum},
-    {"pressure",    pres}
+    {"humidity",    hum}
+#ifdef SENSOR_TYPE_BME280
+    ,{"pressure",    pres}
+#endif
   };
   tb.sendTelemetry(data, DATA_ITEMS);
 

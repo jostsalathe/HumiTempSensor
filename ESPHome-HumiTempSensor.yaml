@@ -26,7 +26,7 @@ wifi:
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
-    ssid: "${device_name} Fallback Hotspot"
+    ssid: "${device_name} Fallback"
     password: "GENERATE_NEW_RANDOM_PASSWORD"
 
 captive_portal:
@@ -96,10 +96,3 @@ display:
       it.print(96, 0, id(rob10), "\% hum");
       it.printf(76, 9, id(rob24), "%5.1f", id(hum).state);
       if (id(hum).state >= ${warn_threshold}) it.print(48, 0, id(rob12), "!WARN!");
-
-# interval:
-#   - interval: 10s
-#     then:
-#       - component.update: bme
-#       - delay: 100ms
-#       - component.update: ssd

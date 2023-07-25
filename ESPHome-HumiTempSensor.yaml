@@ -89,6 +89,7 @@ display:
     id: ssd
     update_interval: never
     rotation: 180°
+    contrast: 1%
     lambda: |-
       it.print(4, 0, id(rob10), "°C temp");
       it.printf(4, 9, id(rob24), "%4.1f", id(temp).state);

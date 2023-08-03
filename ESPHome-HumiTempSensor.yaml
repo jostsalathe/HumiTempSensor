@@ -1,6 +1,7 @@
 substitutions:
   device_name: "HumiTempSensor"
   warn_threshold: "65.0"
+  display_rotation: "0°"
 
 esphome:
   name: humitempsensor
@@ -30,6 +31,16 @@ wifi:
     password: "GENERATE_NEW_RANDOM_PASSWORD"
 
 captive_portal:
+
+# everything below this could be outsourced with e.g.
+# <<: !include humitemp/common.yaml
+
+time:
+  - platform: homeassistant
+
+sun:
+  latitude: 42.0°
+  longitude: 69.0°
 
 output:
   - platform: gpio
@@ -70,8 +81,10 @@ sensor:
             - output.turn_on: led5
     address: 0x76
     update_interval: 10s
+  - platform: sun
+    id: sun_elev
+    type: elevation
     
-
 font:
   - file: "gfonts://Roboto"
     size: 10
@@ -88,11 +101,17 @@ display:
     model: SSD1306_128X32
     id: ssd
     update_interval: never
-    rotation: 180°
-    contrast: 1%
+    rotation: ${display_rotation}
     lambda: |-
       it.print(4, 0, id(rob10), "°C temp");
       it.printf(4, 9, id(rob24), "%4.1f", id(temp).state);
       it.print(96, 0, id(rob10), "\% hum");
       it.printf(76, 9, id(rob24), "%5.1f", id(hum).state);
-      if (id(hum).state >= ${warn_threshold}) it.print(48, 0, id(rob12), "!WARN!");
+      // dim display at night
+      ((esphome::ssd1306_base::SSD1306 &) it).set_contrast(id(sun_elev).state / 100.0);
+      if (id(hum).state >= ${warn_threshold}) {
+        it.print(48, 0, id(rob12), "!WARN!");
+        //((esphome::ssd1306_base::SSD1306 &) it).set_invert(true); //waiting for https://github.com/esphome/feature-requests/issues/2341 to be resolved
+      } else {
+        //((esphome::ssd1306_base::SSD1306 &) it).set_invert(false); //waiting for https://github.com/esphome/feature-requests/issues/2341 to be resolved
+      }

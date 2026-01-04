@@ -117,13 +117,28 @@ void loop()
   ;
 }
 
-
+/**
+ * @brief callback for reception events
+ * 
+ * @param mac String containing recipients mac address
+ * @param data String containing received data
+ * @param len length of received data
+ */
 void espNowRxCb(const uint8_t* mac, const uint8_t* data, uint8_t len)
 {
-  ;
+  //TODO: receive config after pairing
+  //TODO: receive data request (NAK if configuration not present)
 }
 
+/**
+ * @brief callback for transmission events
+ * 
+ * @param mac String containing recipients mac address
+ * @param status transmission result code
+ */
 void espNowTxCb(const uint8_t* mac, uint8_t status)
 {
-  ;
+  //TODO: send latest measurements once if unhandled data request has been received
+}
+
 }

@@ -112,10 +112,97 @@ void setup()
   sensor.begin();
 }
 
+/**
+ * @brief measuring and displaying
+ * 
+ */
 void loop()
 {
-  ;
+  if (_nextMeasurement <= millis())
+  {
+    _nextMeasurement += 1000;
+    getAndShowSensorData();
+  }
+  delay(1);
 }
+
+
+/**
+ * @brief Core function. Gets data and displays data
+ * 
+ */
+void getAndReportSensorData()
+{
+  float dummy;
+  if(_debug) digitalWrite(LED_ST_0, HIGH);
+  printDebug("Acquire new sensor data...");
+  sensor.read(dummy, dummy, dummy, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+  delay(100);
+  sensor.read(_lastPressure, _lastTemperature, _lastHumidity, BME280I2C::TempUnit_Celsius, BME280I2C::PresUnit_hPa);
+  printDebug("Measured: pres=" + String(_lastPressure,2)
+              + "hPa, temp=" + String(_lastTemperature,2)
+              + "°C, hum=" + String(_lastHumidity,2) + "%");
+  displayMeasurements(humidity, temperature, pressure);
+  digitalWrite(LED_ST_0, LOW);
+}
+
+
+/**
+ * @brief writes values to display
+ * 
+ * @param hum relative humidity in %
+ * @param temp temperature in °C
+ * @param pres pressure is in hPa
+ */
+void displayMeasurements(float hum, float temp, float pres)
+{
+  printDebug("Display data...");
+  _display.init();
+  if (_configuration["flipScreen"] == "true") _display.flipScreenVertically();
+  _display.setBrightness(1);
+  _display.setTextAlignment(TEXT_ALIGN_LEFT);
+  _display.clear();
+
+  String sTemp(temp,1);
+  if (temp < 10.0f) sTemp = "0" + sTemp;
+
+  String sHum(hum,1);
+  if (hum >= 100.0f) sHum = "99.9";
+  if (hum < 10.0f) sHum = "0" + sHum;
+  
+  _display.setFont(ArialMT_Plain_24);
+  int wHum = _display.getStringWidth(sHum);
+  int wTemp = _display.getStringWidth(sTemp);
+  _display.drawString(2, 9, sTemp);
+  _display.drawString(125-wHum, 9, sHum);
+
+  _display.setFont(ArialMT_Plain_10);
+  String sHumText = "% hum";
+  String sTempText = "°C temp";
+  int wHumText = _display.getStringWidth(sHumText);
+  int wTempText = _display.getStringWidth(sTempText);
+  _display.drawString(4, 0, sTempText);
+  _display.drawString(123-wHumText, 0, sHumText);
+
+  if (hum>_warnThreshold)
+  {
+    _display.setFont(ArialMT_Plain_10);
+    String sWarn = "WARN!";
+    int wWarn = _display.getStringWidth(sWarn);
+    int pWarn = (127-wTempText-wHumText)/2 + wTempText - wWarn/2;
+    _display.drawString(pWarn, 0, sWarn);
+    _display.invertDisplay();
+  }
+  else
+  {
+    _display.normalDisplay();
+  }
+  
+  _display.display();
+  printDebug("Display data - done.");
+}
+
+
 
 /**
  * @brief callback for reception events

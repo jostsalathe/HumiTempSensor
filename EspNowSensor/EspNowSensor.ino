@@ -2,6 +2,8 @@
 #include <espnow.h>
 
 #include <BME280I2C.h>
+#include <Wire.h>
+#include <SSD1306Wire.h>
 
 
 /**
@@ -18,11 +20,64 @@
  *  flipScreen - rotate the display content 180° to adapt to device orientation
  */
 
+// === pinout definitions =============================
+const uint8_t LED_ST_0              =  4; //!< status LED pin (active HIGH)
+const uint8_t LED_ST_1              =  5; //!< status LED pin (active HIGH)
+const uint8_t GPIO12                = 12; //!< unused GPIO pin
+const uint8_t GPIO13                = 13; //!< unused GPIO pin
+const uint8_t DEBUG_EN              = 14; //!< debug enable pin / solder bridge (active LOW)
+const uint8_t DISPLAY_SENSOR_DATA   =  2; //!< data pin for IIC (display and sensor)
+const uint8_t DISPLAY_SENSOR_CLOCK  =  0; //!< clock pin for IIC (display and sensor)
+const uint8_t FORCE_CFG             =  0; //!< force configuration AP pin / button (active LOW)
+
+// === construct SSD1306 OLED. ========================
+SSD1306Wire _display(0x3c, DISPLAY_SENSOR_DATA, DISPLAY_SENSOR_CLOCK, GEOMETRY_128_32);
+
+// === construct sensor. ==============================
+BME280I2C::Settings _bmeSettings(
+  BME280I2C::OSR_X1,              // temp oversampling
+  BME280I2C::OSR_X1,              // humidity oversampling
+  BME280I2C::OSR_X1,              // pressure oversampling
+  BME280I2C::Mode_Forced,
+  BME280I2C::StandbyTime_1000ms,
+  BME280I2C::Filter_Off,
+  BME280I2C::SpiEnable_False,
+  (BME280I2C::I2CAddr)0x76        // I2C address. (0x76 is default, 0x77 alternative)
+);
+BME280I2C sensor(_bmeSettings);
+
+// === strapping pin defined config ===================
+bool _debug = true; //!< whether debug output should be printed, or not (determined on reset by DEBUG_EN pin)
+
+// === EspNowStore defined config =====================
+bool _flipScreen = false;           //!< whether the display content should be rotated 180°
+float _warnThreshold = 70.0f;       //!< humidity threshold at which to show a warning on the display
+
+// === global working variables =======================
+unsigned long _nextMeasurement = 0; //!< time point of next measurement according to millis()
+float _lastPressure = NAN;          //!< in hPa, last measurement value for pressure
+float _lastTemperature = NAN;       //!< in Celsius, last measurement value for temperature
+float _lastHumidity = NAN;          //!< in percent relative, last measurement value for humidity
+
+
+/**
+ * @brief init of entire program
+ * 
+ */
 void setup()
 {
+  pinMode(DEBUG_EN, INPUT_PULLUP);
+  // internally pulled high - solder bridge open
+  _debug = !digitalRead(DEBUG_EN);
+  pinMode(LED_ST_0, OUTPUT);
+  pinMode(LED_ST_1, OUTPUT);
+  digitalWrite(LED_ST_0, LOW);
+  digitalWrite(LED_ST_1, LOW);
+
   Serial.begin(115200);
   Serial.println();
   Serial.println("Starting HumiTempSensor");
+  Wire.begin(DISPLAY_SENSOR_DATA, DISPLAY_SENSOR_CLOCK);
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
@@ -54,6 +109,7 @@ void setup()
     Serial.println("WifiEspNow.addPeer() failed");
     ESP.restart();
   }
+  sensor.begin();
 }
 
 void loop()

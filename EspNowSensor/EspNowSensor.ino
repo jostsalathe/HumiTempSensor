@@ -4,6 +4,20 @@
 #include <BME280I2C.h>
 
 
+/**
+ * ESP-NOW COMMANDS {uint8_t cmd, ...}
+ *  0x00 - set sensor config
+ *   {uint8_t warnThreshold, uint8_t flipScreen}
+ *  0x01 - request measurement data
+ *   {}
+ *  0x02 - send measurement data
+ *   {float pressure, float temperature, float humidity}
+ * CONFIG PARAMETERS (received from EspNowStore, not stored permanently on this device)
+ *  StoreMac - mac address of EspNowStore device
+ *  warnThreshold - humidity threshold at and above wich the display will invert for visible warning
+ *  flipScreen - rotate the display content 180° to adapt to device orientation
+ */
+
 void setup()
 {
   Serial.begin(115200);

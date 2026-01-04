@@ -141,4 +141,32 @@ void espNowTxCb(const uint8_t* mac, uint8_t status)
   //TODO: send latest measurements once if unhandled data request has been received
 }
 
+/**
+ * @brief logs to Serial whilst adding a time stamp
+ * 
+ * @param logTxt String to print to Serial
+ * @sa Serial.println()
+ */
+void logToSerial(const String & logTxt)
+{
+  unsigned long time = millis();
+  int milliseconds = time % 1000;
+  int seconds = (time / 1000) % 60;
+  int minutes = (time / 1000 / 60) % 60;
+  int hours = time / 1000 / 60 / 60;
+  char buf[32];
+  sprintf(buf,"%4d:%02d:%02d.%03d ", hours, minutes, seconds, milliseconds);
+  Serial.print(buf);
+  Serial.println(logTxt);
+}
+
+/**
+ * @brief convenience wrapper to only logToSerial, when _debug is set
+ *
+ * @param debugTxt String to print to Serial
+ * @sa logToSerial()
+ */
+void printDebug(const String & debugTxt)
+{
+  if (_debug) logToSerial(debugTxt);
 }

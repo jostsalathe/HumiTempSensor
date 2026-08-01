@@ -1,7 +1,26 @@
 # HumiTempSensor
 Firmware for little board around an ESP-12F using a BME280 to record temperature and rel. humidity to ThingsBoard.
 
-## What you need
+## With ESPHome
+You can just generate [ESPHome](https://esphome.io/) firmware using `ESPHome-HumiTempSensor.yaml` after adapting it to your needs and flash it to this board.
+
+## Stand alone with ESP-NOW (work in progress)
+The idea is to have a dedicated little storage unit (some ESP with an SD card) and have multiple sensors regularly report their measurements to this storage unit via ESP-NOW.
+
+This would make the device set completely contained and independant of anyexisting WiFi.
+
+Optionally, the storage unit might also connect to an existing network to fetch stuff like NTP time.
+
+This is implemented with the Arduino framework using [this ESP_NOW library](https://github.com/yoursunny/WifiEspNow).
+
+Inspiration is taken e.g. from:
+- [WifiEspNow.cpp lib source](https://github.com/yoursunny/WifiEspNow/blob/main/src/WifiEspNow.cpp)
+- [EspNowUnicast.ino example](https://github.com/yoursunny/WifiEspNow/blob/main/examples/EspNowUnicast/EspNowUnicast.ino)
+
+## Legacy ThingsBoard approach
+This is not supported any more because ESPHome is just too simple for me.
+
+### What you need
 You need the following software components:
 - Arduino IDE
 - [esp8266 board package](https://github.com/esp8266/Arduino)
@@ -24,7 +43,7 @@ I built a nice little board ([ESP8266 12F BME280](https://easyeda.com/jostsalath
 
 I recommend using some wire to mount the sensor with a few centimeters distance to the main board since the ESP gets a little warm even when only sampling every 30 second.
 
-## How to use it
+### How to use it
 - Clone this repository
 - Upload the sketch via the *Arduino* IDE
 - Connect to WiFi access point created by the ESP and open http://10.1.1.1

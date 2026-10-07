@@ -7,6 +7,8 @@ You can just generate [ESPHome](https://esphome.io/) firmware using `ESPHome-Hum
 ## Stand alone with ESP-NOW (work in progress)
 The idea is to have a dedicated little storage unit (some ESP with an SD card) and have multiple sensors regularly report their measurements to this storage unit via ESP-NOW.
 
+Do this with PlatformIO instead of plain Arduino?
+
 This would make the device set completely contained and independant of anyexisting WiFi.
 
 Optionally, the storage unit might also connect to an existing network to fetch stuff like NTP time.

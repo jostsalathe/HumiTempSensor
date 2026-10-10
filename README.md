@@ -4,20 +4,10 @@ Firmware for little board around an ESP-12F using a BME280 to record temperature
 ## With ESPHome
 You can just generate [ESPHome](https://esphome.io/) firmware using `ESPHome-HumiTempSensor.yaml` after adapting it to your needs and flash it to this board.
 
-## Stand alone with ESP-NOW (work in progress)
-The idea is to have a dedicated little storage unit (some ESP with an SD card) and have multiple sensors regularly report their measurements to this storage unit via ESP-NOW.
+## Stand alone with ESP-NOW (planned)
+The planned system uses one or more ESP-12F/BME280 sensor nodes to report measurements to an ESP32-WROOM-32 storage unit over ESP-NOW. The Store may optionally join Wi-Fi for NTP time; the sensor network should not depend on an access point.
 
-Do this with PlatformIO instead of plain Arduino?
-
-This would make the device set completely contained and independant of anyexisting WiFi.
-
-Optionally, the storage unit might also connect to an existing network to fetch stuff like NTP time.
-
-This is implemented with the Arduino framework using [this ESP_NOW library](https://github.com/yoursunny/WifiEspNow).
-
-Inspiration is taken e.g. from:
-- [WifiEspNow.cpp lib source](https://github.com/yoursunny/WifiEspNow/blob/main/src/WifiEspNow.cpp)
-- [EspNowUnicast.ino example](https://github.com/yoursunny/WifiEspNow/blob/main/examples/EspNowUnicast/EspNowUnicast.ino)
+These projects are not implemented yet. See the [Sensor PlatformIO plan](EspNowSensor/PLAN.md) and [Store PlatformIO plan](EspNowStore/PLAN.md) for hardware, display, protocol, and implementation requirements.
 
 ## Legacy ThingsBoard approach
 This is not supported any more because ESPHome is just too simple for me.
